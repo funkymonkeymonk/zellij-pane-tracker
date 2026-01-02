@@ -158,7 +158,7 @@ function resolvePaneId(pane_id: string, metadata: PaneInfo | null): string | nul
 // Create MCP server
 const server = new McpServer({
   name: "zellij-pane-mcp",
-  version: "0.7.0",
+  version: "0.8.0",
 });
 
 // Tool: get_panes - List all panes with their names
@@ -414,21 +414,35 @@ async function resolveAndNavigateToPane(
     return { found: false, terminalNum: null, tabName: null };
   }
   
-  // No tab specified - search current tab ONLY (don't fall back to other tabs)
-  // This matches user expectation: "Pane 2" means "Pane #2 in this tab"
+  // No tab specified - search current tab FIRST, then fall back to all tabs
+  // This provides better UX: "Pane 2" will find the pane even if it's in another tab
   // 
   // IMPORTANT: findPaneInCurrentTab leaves focus on the found pane, so we're already there.
-  // We pass originTabName so the caller knows where we started (for return navigation).
   const currentTabResult = await findPaneInCurrentTab(sessionName, paneQuery, metadata);
   if (currentTabResult) {
     // Found in current tab! We're already focused on it.
-    // tabName is passed from caller (they know which tab we started on)
     return { found: true, terminalNum: currentTabResult.terminalId, tabName: null };
   }
   
-  // NOT FOUND in current tab - return failure
-  // User must explicitly specify tab if they want a pane from another tab
-  // e.g., "Tab 2 Pane 1" or "shell Pane 2"
+  // NOT FOUND in current tab - fall back to searching ALL tabs
+  // This ensures we can find panes even when user doesn't specify the tab
+  console.error(`[DEBUG] Pane '${paneQuery}' not found in current tab, searching all tabs...`);
+  
+  // Try to resolve from metadata first (faster than cycling)
+  if (metadata) {
+    const terminalNum = resolvePaneId(paneQuery, metadata);
+    if (terminalNum) {
+      const targetPaneId = `terminal_${terminalNum}`;
+      // Navigate to the pane (will search all tabs)
+      const navResult = await navigateToTargetPaneWithTabTracking(sessionName, targetPaneId);
+      if (navResult.found) {
+        console.error(`[DEBUG] Found pane in tab: ${navResult.tabName}`);
+        return { found: true, terminalNum, tabName: navResult.tabName };
+      }
+    }
+  }
+  
+  // Last resort: return failure
   return { found: false, terminalNum: null, tabName: null };
 }
 
@@ -607,7 +621,7 @@ server.tool(
   `Dump the scrollback content of a specific terminal pane. Can use terminal ID (e.g., '2' or 'terminal_2') or display name (e.g., 'Pane #2', 'opencode').
 
 Supports tab-scoped queries:
-- "Pane 1" or "1" → searches current tab first (fast), then other tabs
+- "Pane 1" or "1" → searches current tab first, then falls back to all tabs if not found
 - "Tab 2 Pane 1" → goes directly to Tab #2, searches only there
 
 By default, returns last ${DEFAULT_DUMP_LINES} lines for faster responses. Use 'full: true' for complete scrollback, or 'lines: N' to customize.`,
@@ -710,8 +724,10 @@ server.tool(
   `Run a shell command in a specific pane (by cycling to it, running command, returning).
 
 Supports tab-scoped queries:
-- "Pane 1" or "1" → searches current tab first (fast), then other tabs
-- "Tab 2 Pane 1" → goes directly to Tab #2, searches only there`,
+- "Pane 1" or "1" → searches current tab first, then falls back to all tabs if not found
+- "Tab 2 Pane 1" → goes directly to Tab #2, searches only there
+
+Note: Includes 200ms delay after command execution to ensure it completes before returning focus.`,
   {
     pane_id: z
       .string()
@@ -751,13 +767,33 @@ Supports tab-scoped queries:
       
       const targetPaneId = `terminal_${resolution.terminalNum}`;
       
-      // Write the command (we're already focused on target)
-      await $`zellij -s ${sessionName} action write-chars ${command}`.quiet();
+      // Write the command using byte codes to avoid write-chars duplication bug
+      // Convert string to ASCII byte codes
+      const bytes = [...command].map(c => c.charCodeAt(0));
+      console.error(`[DEBUG] Writing command to ${targetPaneId}: ${command}`);
+      await $`zellij -s ${sessionName} action write ${bytes.join(' ')}`.quiet();
       await $`zellij -s ${sessionName} action write 10`.quiet(); // Enter
+      
+      // Wait for command to execute (200ms should be enough for simple commands)
+      await new Promise(resolve => setTimeout(resolve, 200));
       
       // Return to origin (OPTIMIZED - direct tab jump + local pane cycle)
       if (originPaneId && originPaneId !== targetPaneId) {
+        console.error(`[DEBUG] Returning to origin pane: ${originPaneId} in tab: ${originTabName || 'unknown'}`);
         await returnToOrigin(sessionName, originPaneId, originTabName);
+        
+        // Verify we actually returned to origin
+        const currentPaneAfterReturn = await getCurrentPaneId(sessionName);
+        if (currentPaneAfterReturn !== originPaneId) {
+          console.error(`[DEBUG] Return verification FAILED. Expected: ${originPaneId}, Got: ${currentPaneAfterReturn}`);
+          // Fallback: try full navigation
+          const fallbackResult = await navigateToTargetPane(sessionName, originPaneId);
+          if (!fallbackResult) {
+            console.error(`[DEBUG] Fallback navigation also failed!`);
+          }
+        } else {
+          console.error(`[DEBUG] Return verification SUCCESS`);
+        }
       }
       
       return { content: [{ type: "text", text: `Executed in ${targetPaneId}: ${command}` }] };
@@ -843,11 +879,15 @@ server.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Zellij Pane MCP server v0.7.0 running on stdio (strict current-tab-only)");
+  console.error("Zellij Pane MCP server v0.8.0 running on stdio");
 }
 
 main().catch(console.error);
 
+// v0.8.0 - FIX: "Pane N" now falls back to all tabs if not found in current tab (reverses v0.7.0 breaking change)
+//          FIX: Added 200ms delay after command execution for reliability
+//          FIX: Added return navigation verification with fallback
+//          FIX: Added debug logging for troubleshooting
 // v0.7.0 - BREAKING: "Pane N" now ONLY searches current tab (no fallback to other tabs)
 //          User must explicitly specify tab for cross-tab queries ("Tab 2 Pane 1")
 // v0.6.1 - Support named tabs ("shell Pane 1") in addition to numeric ("Tab 2 Pane 1")
