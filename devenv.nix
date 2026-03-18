@@ -2,7 +2,7 @@
 
 let
   wasmTarget = "wasm32-wasip1";
-  pluginName = "zellij_pane_tracker";
+  pluginName = "zellij-pane-tracker";
   pluginDir = "$HOME/.config/zellij/plugins";
 in
 {
@@ -17,6 +17,7 @@ in
   packages = [
     pkgs.jq
     pkgs.bun
+    pkgs.zellij
   ];
 
   # Build script - compiles the plugin to WASM
