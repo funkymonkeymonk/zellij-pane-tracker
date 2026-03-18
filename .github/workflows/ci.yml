@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+
+      - name: Build and test
+        run: devenv test
+
+      - name: Build plugin
+        shell: devenv shell bash -- -e {0}
+        run: build
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zellij-pane-tracker-${{ matrix.os }}
+          path: target/wasm32-wasip1/release/zellij_pane_tracker.wasm
