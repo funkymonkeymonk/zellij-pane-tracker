@@ -63,12 +63,21 @@ in
     clippy.enable = true;
   };
 
+  # Launch Zellij with the locally-built plugin loaded
+  scripts.dev.exec = ''
+    build
+    local_wasm="$DEVENV_ROOT/target/${wasmTarget}/release/${pluginName}.wasm"
+    echo "Starting Zellij with local plugin: $local_wasm"
+    zellij --layout "$DEVENV_ROOT/dev-layout.kdl"
+  '';
+
   enterShell = ''
     echo "zellij-pane-tracker development environment"
     echo ""
     echo "Available commands:"
+    echo "  dev          - Build and launch Zellij with the local plugin"
     echo "  build        - Build the WASM plugin"
-    echo "  install      - Build and install to ~/.config/zellij/plugins/"
+    echo "  install      - Build and copy to ${pluginDir}/"
     echo "  lint         - Run clippy and check formatting"
     echo "  fmt          - Format Rust code"
     echo "  mcp-install  - Install MCP server dependencies"

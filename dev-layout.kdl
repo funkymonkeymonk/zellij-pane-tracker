@@ -1,0 +1,7 @@
+// Development layout - loads the locally-built pane tracker plugin
+layout {
+    pane size=1 borderless=true {
+        plugin location="file:target/wasm32-wasip1/release/zellij_pane_tracker.wasm"
+    }
+    pane
+}
