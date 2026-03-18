@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 *.wasm
 
 # Build artifacts
@@ -13,5 +12,8 @@ devenv.local.nix
 
 # direnv
 .direnv
+
+# nix
+result
 
 # Note: AGENTS.md is intentionally NOT ignored - it provides context for AI agents
